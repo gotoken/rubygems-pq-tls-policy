@@ -1,0 +1,29 @@
+name: Compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run JRuby and TruffleRuby Docker probes
+        run: script/compatibility-docker
+
+      - name: Write compatibility summary
+        if: always()
+        run: |
+          {
+            echo "## Ruby compatibility probe"
+            echo ""
+            echo "- Job status so far: \`${{ job.status }}\`"
+            echo ""
+            echo "See the job log for JRuby and TruffleRuby diagnostics."
+          } >> "$GITHUB_STEP_SUMMARY"

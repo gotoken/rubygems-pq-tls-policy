@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+IMAGE="${RUBY_DOCKER_IMAGE:-ruby:4.0.5-trixie}"
+
+docker run --rm \
+  -v "${ROOT}:/work" \
+  -w /work \
+  "${IMAGE}" \
+  bash -lc "bundle install && script/integration"

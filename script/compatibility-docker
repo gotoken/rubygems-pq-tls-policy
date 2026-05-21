@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+IMAGES=(
+  "${JRUBY_DOCKER_IMAGE:-jruby:latest}"
+  "${TRUFFLERUBY_DOCKER_IMAGE:-ghcr.io/flavorjones/truffleruby:latest}"
+)
+
+for image in "${IMAGES[@]}"; do
+  echo "== compatibility probe: ${image}"
+
+  set +e
+  output="$(
+    docker run --rm \
+      -v "${ROOT}:/work" \
+      -w /work \
+      "${image}" \
+      ruby -Ilib -rrubygems_pq_tls_policy -e '
+        puts RUBY_DESCRIPTION
+        Gem::PqTlsPolicy::Diagnostic.report($stdout)
+
+        ENV["RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY"] = "pq_required"
+        begin
+          Gem::PqTlsPolicy.install_if_enabled
+          puts "policy installed"
+        rescue Gem::PqTlsPolicy::UnsupportedRuntime => e
+          warn "#{e.class}: #{e.message}"
+          exit 42
+        end
+      ' 2>&1
+  )"
+  status=$?
+  set -e
+
+  printf "%s\n" "$output"
+
+  case "$status" in
+    0)
+      if ! grep -q "policy installed" <<<"$output"; then
+        echo "expected policy installation confirmation for ${image}" >&2
+        exit 1
+      fi
+      ;;
+    42)
+      if ! grep -q "Gem::PqTlsPolicy::UnsupportedRuntime" <<<"$output"; then
+        echo "expected UnsupportedRuntime for ${image}" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "unexpected compatibility probe exit status ${status} for ${image}" >&2
+      exit "$status"
+      ;;
+  esac
+done
+
+echo "== compatibility probes complete"

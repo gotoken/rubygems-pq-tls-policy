@@ -1,0 +1,56 @@
+# Bundler
+.bundle/
+vendor/bundle/
+#Gemfile.lock
+
+# Built gems
+pkg/
+*.gem
+
+# Test and coverage output
+coverage/
+.simplecov/
+.rspec_status
+.minitest-cache/
+
+# Local integration test artifacts
+tmp/
+log/
+
+# Generated TLS certificates / keys
+*.key
+*.crt
+*.csr
+*.pem
+*.p12
+*.srl
+
+# Local fixture repositories / generated indexes
+specs.4.8*
+latest_specs.4.8*
+prerelease_specs.4.8*
+quick/
+gems/
+
+# Local Ruby / version-manager files
+.ruby-version
+.ruby-gemset
+.tool-versions
+
+# Editor / OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Docker / local scratch
+.docker/
+

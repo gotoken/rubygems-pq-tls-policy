@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+PORT="${PORT:-8443}"
+HOST="127.0.0.1"
+SOURCE_URL="https://${HOST}:${PORT}"
+TMP="$ROOT/tmp/integration"
+LOG="$TMP/server.log"
+
+cleanup() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+start_server() {
+  local groups="$1"
+  local pushed_path="$2"
+  local log_path="$3"
+
+  rm -f "$log_path"
+  ruby test/integration/pq_tls/https_gem_server.rb \
+    --dir "$TMP/repo" \
+    --cert "$TMP/certs/localhost.crt" \
+    --key "$TMP/certs/localhost.key" \
+    --port "$PORT" \
+    --bind "$HOST" \
+    --groups "$groups" \
+    --pushed-path "$pushed_path" \
+    > "$log_path" 2>&1 &
+
+  SERVER_PID=$!
+
+  if ! ruby test/integration/pq_tls/wait_port.rb "$HOST" "$PORT" 30; then
+    echo "server did not start" >&2
+    cat "$log_path" >&2 || true
+    exit 1
+  fi
+}
+
+stop_server() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+  fi
+}
+
+expect_failure() {
+  set +e
+  "$@"
+  local status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]]; then
+    echo "expected failure, but command succeeded: $*" >&2
+    exit 1
+  fi
+}
+
+require_integration_tls_support() {
+  if ruby -ropenssl -e 'socket = OpenSSL::SSL::SSLSocket; context = OpenSSL::SSL::SSLContext.new; exit(socket.method_defined?(:group) && context.respond_to?(:groups=) ? 0 : 1)'; then
+    return
+  fi
+
+  echo "integration requires Ruby/OpenSSL support for TLS group inspection and selection." >&2
+  echo "This Ruby/OpenSSL cannot run the local PQ TLS server." >&2
+  echo "Try: script/integration-docker" >&2
+  exit 1
+}
+
+echo "== diagnose TLS support"
+ruby script/diagnose-tls
+require_integration_tls_support
+
+echo "== prepare fixture repository"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+ruby test/integration/pq_tls/build_fixture_gem.rb
+ruby test/integration/pq_tls/make_repo.rb
+ruby test/integration/pq_tls/make_cert.rb
+
+export SSL_CERT_FILE="$TMP/certs/localhost.crt"
+export GEM_HOST_API_KEY="dummy-token"
+export RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="pq_required"
+export RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS="X25519MLKEM768"
+export RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE="1"
+export RUBYOPT="-I$ROOT/lib -rrubygems_plugin ${RUBYOPT:-}"
+
+echo "== start PQ TLS gem server"
+start_server "X25519MLKEM768" "$TMP/pushed.gem" "$LOG"
+
+mkdir -p "$TMP/work"
+(
+  cd "$TMP/work"
+
+  echo "== gem fetch"
+  gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
+
+  echo "== gem install"
+  gem install pq_tls_fixture \
+    --clear-sources \
+    --source "$SOURCE_URL" \
+    --no-document \
+    --install-dir "$TMP/installed_gems"
+)
+
+echo "== bundle install"
+mkdir -p "$TMP/bundle_app"
+cat > "$TMP/bundle_app/Gemfile" <<RUBY
+source "$SOURCE_URL"
+gem "pq_tls_fixture"
+RUBY
+(
+  cd "$TMP/bundle_app"
+  ruby -S bundle config set path vendor/bundle
+  ruby -S bundle install
+)
+
+echo "== gem push"
+gem push "$TMP/fixture/pq_tls_fixture-0.1.0.gem" --host "$SOURCE_URL"
+test -s "$TMP/pushed.gem"
+
+stop_server
+
+echo "== start non-PQ TLS gem server for failure checks"
+rm -f "$TMP/pushed_nonpq.gem"
+start_server "X25519" "$TMP/pushed_nonpq.gem" "$TMP/server-nonpq.log"
+
+(
+  cd "$TMP/work"
+  rm -f pq_tls_fixture-0.1.0.gem
+  echo "== gem fetch should fail with non-PQ group"
+  expect_failure gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
+)
+
+echo "== gem push should fail before body is accepted"
+expect_failure gem push "$TMP/fixture/pq_tls_fixture-0.1.0.gem" --host "$SOURCE_URL"
+if [[ -e "$TMP/pushed_nonpq.gem" ]]; then
+  echo "non-PQ push unexpectedly reached fake server body handler" >&2
+  exit 1
+fi
+
+echo "== integration complete"
