@@ -12,6 +12,9 @@
 
 ## Unreleased
 
+- Make RubyGems plugin load failures terminate the `gem` command when the PQ TLS policy is enabled but cannot be installed.
+- Add integration coverage for RubyGems plugin auto-loading from an installed gem on supported and unsupported Docker runtimes.
+
 ## 0.1.0 - 2026-05-22
 
 - Initial repository skeleton.

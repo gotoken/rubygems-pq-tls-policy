@@ -4,4 +4,4 @@
 # active. Use a relative require so plugin auto-loading works during installation.
 require_relative "rubygems_pq_tls_policy"
 
-Gem::PqTlsPolicy.install_if_enabled
+Gem::PqTlsPolicy.install_if_enabled_for_plugin!

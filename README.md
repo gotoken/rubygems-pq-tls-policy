@@ -65,6 +65,9 @@ A compliant connection prints trace output similar to:
 
 A non-compliant connection raises `Gem::PqTlsPolicy::Violation` before the RubyGems HTTP request proceeds.
 
+If the policy is enabled on an unsupported runtime, the RubyGems plugin entrypoint exits the `gem` command before the requested operation runs.
+This is intentional because RubyGems treats ordinary plugin load exceptions as warnings and otherwise continues.
+
 ## Development
 
 Install dependencies:
@@ -116,6 +119,8 @@ The integration script:
 6. restarts the server with `X25519`, and
 7. verifies that non-PQ TLS group usage is rejected.
 
+It also builds and installs this plugin into a temporary `GEM_HOME`, clears `RUBYOPT`, and verifies RubyGems plugin auto-loading from the installed gem.
+
 The script loads the plugin from the checkout using `RUBYOPT=-Ilib -rrubygems_plugin`, so you can test changes before packaging or installing the gem.
 
 ## Docker real-TLS integration test
@@ -127,6 +132,7 @@ script/integration-docker
 ```
 
 This runs `script/integration` in the official `ruby:4.0.5-trixie` image, which currently provides Ruby 4.0.5 linked against OpenSSL 3.5.
+It also verifies that an installed plugin auto-load on `ruby:4.0.5-bookworm` fails closed before the requested `gem` operation runs.
 
 To use another image:
 

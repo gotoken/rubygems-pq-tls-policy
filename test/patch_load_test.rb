@@ -39,4 +39,29 @@ class PatchLoadTest < Minitest::Test
   rescue LoadError
     skip "OpenSSL unavailable on this runtime"
   end
+
+  def test_plugin_entrypoint_exits_on_policy_error
+    singleton = class << Gem::PqTlsPolicy; self; end
+    singleton.alias_method :__original_install_if_enabled, :install_if_enabled
+    singleton.define_method(:install_if_enabled) do
+      raise Gem::PqTlsPolicy::UnsupportedRuntime, "unsupported runtime"
+    end
+
+    _, err = capture_io do
+      error = assert_raises(SystemExit) do
+        Gem::PqTlsPolicy.install_if_enabled_for_plugin!
+      end
+
+      refute error.success?
+    end
+
+    assert_includes err, "RubyGems PQ TLS policy failed to load"
+    assert_includes err, "unsupported runtime"
+    assert_includes err, "Gem::PqTlsPolicy::UnsupportedRuntime"
+  ensure
+    if singleton&.method_defined?(:__original_install_if_enabled)
+      singleton.alias_method :install_if_enabled, :__original_install_if_enabled
+      singleton.remove_method :__original_install_if_enabled
+    end
+  end
 end

@@ -58,3 +58,53 @@ jobs:
           path: |
             tmp/integration/*.log
             tmp/integration/**/*.log
+
+  unsupported-plugin-autoload:
+    runs-on: ubuntu-24.04
+    container:
+      image: ruby:4.0.5-bookworm
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show versions
+        run: |
+          ruby -v
+          ruby -ropenssl -e 'puts OpenSSL::OPENSSL_VERSION; puts OpenSSL::OPENSSL_LIBRARY_VERSION if defined?(OpenSSL::OPENSSL_LIBRARY_VERSION); p OpenSSL::SSL::SSLSocket.method_defined?(:group)'
+
+      - name: Installed plugin auto-load fails closed
+        run: |
+          set +e
+          output="$(
+            gem build rubygems-pq-tls-policy.gemspec --output /tmp/rubygems-pq-tls-policy.gem >/dev/null &&
+            gem install /tmp/rubygems-pq-tls-policy.gem --no-document >/dev/null &&
+            RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
+            RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE=1 \
+              gem install rake &&
+            echo "unexpected success"
+          2>&1)"
+          status=$?
+          set -e
+
+          printf "%s\n" "$output"
+
+          if [ "$status" -eq 0 ]; then
+            echo "expected unsupported runtime to fail during installed plugin auto-load" >&2
+            exit 1
+          fi
+
+          if grep -q "unexpected success" <<<"$output"; then
+            echo "unsupported runtime continued after plugin auto-load failure" >&2
+            exit 1
+          fi
+
+          if ! grep -q "Gem::PqTlsPolicy::UnsupportedRuntime" <<<"$output"; then
+            echo "expected UnsupportedRuntime error" >&2
+            exit 1
+          fi
+
+          if ! grep -q "RubyGems PQ TLS policy failed to load" <<<"$output"; then
+            echo "expected plugin entrypoint abort message" >&2
+            exit 1
+          fi
