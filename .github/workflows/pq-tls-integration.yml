@@ -76,17 +76,18 @@ jobs:
       - name: Installed plugin auto-load fails closed
         run: |
           set +e
-          output="$(
+          {
             gem build rubygems-pq-tls-policy.gemspec --output /tmp/rubygems-pq-tls-policy.gem >/dev/null &&
             gem install /tmp/rubygems-pq-tls-policy.gem --no-document >/dev/null &&
             RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
             RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE=1 \
               gem install rake &&
             echo "unexpected success"
-          2>&1)"
+          } > /tmp/plugin-autoload-output.log 2>&1
           status=$?
           set -e
 
+          output="$(cat /tmp/plugin-autoload-output.log)"
           printf "%s\n" "$output"
 
           if [ "$status" -eq 0 ]; then
@@ -94,17 +95,17 @@ jobs:
             exit 1
           fi
 
-          if grep -q "unexpected success" <<<"$output"; then
+          if printf "%s\n" "$output" | grep -q "unexpected success"; then
             echo "unsupported runtime continued after plugin auto-load failure" >&2
             exit 1
           fi
 
-          if ! grep -q "Gem::PqTlsPolicy::UnsupportedRuntime" <<<"$output"; then
+          if ! printf "%s\n" "$output" | grep -q "Gem::PqTlsPolicy::UnsupportedRuntime"; then
             echo "expected UnsupportedRuntime error" >&2
             exit 1
           fi
 
-          if ! grep -q "RubyGems PQ TLS policy failed to load" <<<"$output"; then
+          if ! printf "%s\n" "$output" | grep -q "RubyGems PQ TLS policy failed to load"; then
             echo "expected plugin entrypoint abort message" >&2
             exit 1
           fi
