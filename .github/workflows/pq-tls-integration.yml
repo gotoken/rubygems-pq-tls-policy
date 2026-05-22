@@ -18,55 +18,12 @@ on:
 jobs:
   pq-tls-integration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
-
-    env:
-      OPENSSL_VERSION: "3.5.0"
-      RUBY_VERSION: "4.0.5"
-      PREFIX: "${{ github.workspace }}/.local"
+    container:
+      image: ruby:4.0.5-trixie
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential autoconf bison ca-certificates curl \
-            libffi-dev libgdbm-dev libncurses-dev libreadline-dev \
-            libyaml-dev pkg-config zlib1g-dev
-
-      - name: Build OpenSSL 3.5+
-        run: |
-          curl -fsSLO "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
-          tar xf "openssl-${OPENSSL_VERSION}.tar.gz"
-          cd "openssl-${OPENSSL_VERSION}"
-          ./Configure linux-x86_64 \
-            --prefix="$PREFIX/openssl" \
-            --openssldir="$PREFIX/openssl/ssl"
-          make -j"$(nproc)"
-          make install_sw
-
-      - name: Build Ruby against OpenSSL 3.5+
-        run: |
-          ruby_minor="${RUBY_VERSION%.*}"
-          curl -fsSLO "https://cache.ruby-lang.org/pub/ruby/${ruby_minor}/ruby-${RUBY_VERSION}.tar.gz"
-          tar xf "ruby-${RUBY_VERSION}.tar.gz"
-          cd "ruby-${RUBY_VERSION}"
-          ./configure \
-            --prefix="$PREFIX/ruby" \
-            --with-openssl-dir="$PREFIX/openssl" \
-            --disable-install-doc \
-            --disable-yjit
-          make -j"$(nproc)"
-          make install
-
-      - name: Prepare Ruby environment
-        run: |
-          echo "$PREFIX/ruby/bin" >> "$GITHUB_PATH"
-          echo "$PREFIX/openssl/bin" >> "$GITHUB_PATH"
-          echo "LD_LIBRARY_PATH=$PREFIX/openssl/lib64:$PREFIX/openssl/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$PREFIX/openssl/lib64/pkgconfig:$PREFIX/openssl/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
 
       - name: Show versions
         run: |
@@ -82,9 +39,6 @@ jobs:
 
       - name: Run localhost real-TLS integration
         run: script/integration
-
-      - name: Run Docker runtime condition checks
-        run: script/runtime-check-docker
 
       - name: Upload integration logs
         if: always()

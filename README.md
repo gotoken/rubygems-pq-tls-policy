@@ -9,6 +9,7 @@ This repository is an experimental starting point for testing post-quantum TLS k
 When enabled, this plugin installs a process-local Ruby OpenSSL hook and checks TLS connections that pass through `OpenSSL::SSL::SSLSocket#post_connection_check`.
 
 The intended scope is RubyGems HTTPS communication with configured gem servers and gem push hosts, such as `https://rubygems.org` or a private gem server.
+Because the hook is process-local, it may also affect other Ruby OpenSSL HTTPS connections made in the same Ruby process while the policy is enabled.
 
 This is **not** a sandbox. It does **not** restrict network connections made by:
 
@@ -94,6 +95,8 @@ The diagnostic prints whether the current Ruby/OpenSSL exposes the APIs used by 
 
 - `OpenSSL::SSL::SSLSocket#group`
 - `OpenSSL::SSL::SSLContext#groups=`
+
+`OpenSSL::SSL::SSLContext#groups=` is used only by this plugin's development test server to force specific TLS groups during local real-TLS tests.
 
 ## Local real-TLS integration test
 
@@ -181,15 +184,18 @@ This repository includes three workflows:
 |---|---|
 | `CI` | Unit tests and gem build on MRI Ruby. |
 | `Compatibility` | Docker probes on JRuby and TruffleRuby. |
-| `PQ TLS Integration` | Builds OpenSSL 3.5+ and Ruby, then runs localhost real-TLS command tests. |
+| `PQ TLS Integration` | Runs unit tests and localhost real-TLS command tests in `ruby:4.0.5-trixie`. |
 
-Compatibility results should be treated as observed behavior, not a compatibility guarantee.
+Compatibility results should be treated as observed behavior, not a compatibility guarantee. Docker `latest` tags are mutable, so JRuby and TruffleRuby rows record the runtime versions observed by the compatibility probe.
 
-Suggested README compatibility table after running Actions:
+Observed compatibility:
 
-| Runtime | Load test | `SSLSocket#group` | Real TLS integration | Notes |
+| Runtime | Policy enablement | `SSLSocket#group` | Real TLS integration | Notes |
 |---|---:|---:|---:|---|
-| MRI + OpenSSL 3.5+ | ✅ | ✅ | ✅ | Primary target. |
+| `ruby:4.0.5-trixie` (MRI Ruby 4.0.5 + OpenSSL 3.5) | ✅ | ✅ | ✅ | Default Docker integration/runtime-check image and `PQ TLS Integration` container. |
+| `ruby:4.0.5-bookworm` | ❌ | ❌ | N/A | Expected to fail with `Gem::PqTlsPolicy::UnsupportedRuntime`. |
+| JRuby 10.1.0.0 (Ruby 4.0.0), JRuby-OpenSSL 0.15.6 | ❌ | ❌ | N/A | Observed by source-checkout compatibility probe on 2026-05-22. |
+| TruffleRuby 24.2.2 (Ruby 3.3.7), OpenSSL 3.5.1 | ❌ | ❌ | N/A | Observed by source-checkout compatibility probe on 2026-05-22; below the gemspec Ruby requirement. |
 
 ## Command coverage
 
