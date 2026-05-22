@@ -4,6 +4,16 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * 1"
+  push:
+    paths:
+      - "lib/**"
+      - "script/**"
+      - "test/integration/pq_tls/**"
+      - ".github/workflows/pq-tls-integration.yml"
+      - "rubygems-pq-tls-policy.gemspec"
+      - "Gemfile"
+      - "Gemfile.lock"
+      - "Rakefile"
   pull_request:
     paths:
       - "lib/**"
