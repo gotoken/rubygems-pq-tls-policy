@@ -17,6 +17,12 @@ module Gem
         install!
       end
 
+      def install_if_enabled_for_plugin!
+        install_if_enabled
+      rescue Error => e
+        abort "RubyGems PQ TLS policy failed to load: #{e.message} (#{e.class})"
+      end
+
       def install!
         return true if installed?
 

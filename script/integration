@@ -9,6 +9,7 @@ HOST="127.0.0.1"
 SOURCE_URL="https://${HOST}:${PORT}"
 TMP="$ROOT/tmp/integration"
 LOG="$TMP/server.log"
+PLUGIN_GEM="$TMP/plugin/rubygems-pq-tls-policy.gem"
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
@@ -84,6 +85,8 @@ mkdir -p "$TMP"
 ruby test/integration/pq_tls/build_fixture_gem.rb
 ruby test/integration/pq_tls/make_repo.rb
 ruby test/integration/pq_tls/make_cert.rb
+mkdir -p "$TMP/plugin"
+gem build rubygems-pq-tls-policy.gemspec --output "$PLUGIN_GEM"
 
 export SSL_CERT_FILE="$TMP/certs/localhost.crt"
 export GEM_HOST_API_KEY="dummy-token"
@@ -128,6 +131,33 @@ test -s "$TMP/pushed.gem"
 
 stop_server
 
+echo "== installed RubyGems plugin auto-load"
+AUTOLOAD_GEM_HOME="$TMP/autoload_gems"
+AUTOLOAD_WORK="$TMP/autoload_work"
+mkdir -p "$AUTOLOAD_GEM_HOME" "$AUTOLOAD_WORK"
+env -u RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY \
+  -u RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS \
+  -u RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE \
+  -u RUBYOPT \
+  GEM_HOME="$AUTOLOAD_GEM_HOME" \
+  GEM_PATH="$AUTOLOAD_GEM_HOME" \
+  gem install "$PLUGIN_GEM" --no-document
+
+start_server "X25519MLKEM768" "$TMP/pushed_autoload.gem" "$TMP/server-autoload-pq.log"
+(
+  cd "$AUTOLOAD_WORK"
+  echo "== installed plugin gem fetch"
+  env -u RUBYOPT \
+    GEM_HOME="$AUTOLOAD_GEM_HOME" \
+    GEM_PATH="$AUTOLOAD_GEM_HOME" \
+    RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY" \
+    RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS="$RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS" \
+    RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE" \
+    SSL_CERT_FILE="$SSL_CERT_FILE" \
+    gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
+)
+stop_server
+
 echo "== start non-PQ TLS gem server for failure checks"
 rm -f "$TMP/pushed_nonpq.gem"
 start_server "X25519" "$TMP/pushed_nonpq.gem" "$TMP/server-nonpq.log"
@@ -145,5 +175,19 @@ if [[ -e "$TMP/pushed_nonpq.gem" ]]; then
   echo "non-PQ push unexpectedly reached fake server body handler" >&2
   exit 1
 fi
+
+(
+  cd "$AUTOLOAD_WORK"
+  rm -f pq_tls_fixture-0.1.0.gem
+  echo "== installed plugin gem fetch should fail with non-PQ group"
+  expect_failure env -u RUBYOPT \
+    GEM_HOME="$AUTOLOAD_GEM_HOME" \
+    GEM_PATH="$AUTOLOAD_GEM_HOME" \
+    RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY" \
+    RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS="$RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS" \
+    RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE" \
+    SSL_CERT_FILE="$SSL_CERT_FILE" \
+    gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
+)
 
 echo "== integration complete"

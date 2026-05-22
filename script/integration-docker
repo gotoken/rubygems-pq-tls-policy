@@ -3,9 +3,44 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${RUBY_DOCKER_IMAGE:-ruby:4.0.5-trixie}"
+UNSUPPORTED_IMAGE="${UNSUPPORTED_RUBY_DOCKER_IMAGE:-ruby:4.0.5-bookworm}"
 
 docker run --rm \
   -v "${ROOT}:/work" \
   -w /work \
   "${IMAGE}" \
   bash -lc "bundle install && script/integration"
+
+echo "== unsupported installed RubyGems plugin auto-load: ${UNSUPPORTED_IMAGE}"
+set +e
+output="$(
+  docker run --rm \
+    -v "${ROOT}:/work" \
+    -w /work \
+    "${UNSUPPORTED_IMAGE}" \
+    bash -lc 'gem build rubygems-pq-tls-policy.gemspec --output /tmp/rubygems-pq-tls-policy.gem >/dev/null && gem install /tmp/rubygems-pq-tls-policy.gem --no-document >/dev/null && RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE=1 gem install rake && echo "unexpected success"' 2>&1
+)"
+status=$?
+set -e
+
+printf "%s\n" "$output"
+
+if [[ "$status" -eq 0 ]]; then
+  echo "expected unsupported runtime to fail during installed plugin auto-load, but it succeeded" >&2
+  exit 1
+fi
+
+if grep -q "unexpected success" <<<"$output"; then
+  echo "unsupported runtime continued after plugin auto-load failure" >&2
+  exit 1
+fi
+
+if ! grep -q "Gem::PqTlsPolicy::UnsupportedRuntime" <<<"$output"; then
+  echo "expected UnsupportedRuntime error" >&2
+  exit 1
+fi
+
+if ! grep -q "RubyGems PQ TLS policy failed to load" <<<"$output"; then
+  echo "expected plugin entrypoint abort message" >&2
+  exit 1
+fi
