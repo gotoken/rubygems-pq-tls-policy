@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-05-28
+
 - Limit policy installation to RubyGems HTTPS connection pools and per-connection `Gem::Net::HTTP#connect` checks instead of globally prepending `OpenSSL::SSL::SSLSocket`.
 
 ## 1.0.1 - 2026-05-22
