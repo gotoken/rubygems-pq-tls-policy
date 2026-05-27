@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Limit policy installation to RubyGems HTTPS connection pools and per-connection `Gem::Net::HTTP#connect` checks instead of globally prepending `OpenSSL::SSL::SSLSocket`.
+
 ## 1.0.1 - 2026-05-22
 
 - Make RubyGems plugin load failures terminate the `gem` command when the PQ TLS policy is enabled but cannot be installed.

@@ -6,10 +6,10 @@ This repository is an experimental starting point for testing post-quantum TLS k
 
 ## Scope
 
-When enabled, this plugin installs a process-local Ruby OpenSSL hook and checks TLS connections that pass through `OpenSSL::SSL::SSLSocket#post_connection_check`.
+When enabled, this plugin extends the `Gem::Net::HTTP` instances created by RubyGems' HTTPS connection pool and checks each connection after `Net::HTTP#connect` completes.
 
 The intended scope is RubyGems HTTPS communication with configured gem servers and gem push hosts, such as `https://rubygems.org` or a private gem server.
-Because the hook is process-local, it may also affect other Ruby OpenSSL HTTPS connections made in the same Ruby process while the policy is enabled.
+The hook is installed on RubyGems' HTTPS pool and on the individual RubyGems HTTP connection instances it creates; it is not installed globally on `OpenSSL::SSL::SSLSocket` or `Net::HTTP`.
 
 This is **not** a sandbox. It does **not** restrict network connections made by:
 
@@ -97,6 +97,7 @@ script/diagnose-tls
 The diagnostic prints whether the current Ruby/OpenSSL exposes the APIs used by this plugin, especially:
 
 - `OpenSSL::SSL::SSLSocket#group`
+- `Gem::Request::HTTPSPool#setup_connection`
 - `OpenSSL::SSL::SSLContext#groups=`
 
 `OpenSSL::SSL::SSLContext#groups=` is used only by this plugin's development test server to force specific TLS groups during local real-TLS tests.
