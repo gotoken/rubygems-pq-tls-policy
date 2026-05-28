@@ -132,6 +132,54 @@ The certificate signature policy is independent from the TLS key exchange policy
 If the policy is enabled on an unsupported runtime, the RubyGems plugin entrypoint exits the `gem` command before the requested operation runs.
 This is intentional because RubyGems treats ordinary plugin load exceptions as warnings and otherwise continues.
 
+## OpenSSL configuration
+
+This plugin does not choose TLS groups during the handshake.
+TLS negotiation is performed by Ruby's OpenSSL runtime and may be affected by system OpenSSL configuration such as `/etc/openssl/openssl.cnf` or the `OPENSSL_CONF` environment variable.
+
+Before writing an OpenSSL configuration, check what your OpenSSL build exposes:
+
+```sh
+openssl list -tls-groups
+openssl list -signature-algorithms | grep -E 'ML-DSA|SLH-DSA|RSA|ECDSA'
+```
+
+`openssl list -tls-groups` may fail on OpenSSL versions earlier than 3.5.0, where the command-line tool does not expose TLS group listing.
+In that case, use `script/diagnose-tls` to check whether Ruby exposes the APIs this plugin needs.
+You can also check what Ruby sees:
+
+```sh
+ruby -ropenssl -e 'p OpenSSL::OPENSSL_VERSION; p OpenSSL::OPENSSL_LIBRARY_VERSION if defined?(OpenSSL::OPENSSL_LIBRARY_VERSION); p OpenSSL::SSL::SSLContext.new.respond_to?(:groups=)'
+```
+
+For example, a local OpenSSL configuration may restrict the client groups offered by OpenSSL:
+
+```ini
+openssl_conf = openssl_init
+
+[openssl_init]
+ssl_conf = ssl_config
+
+[ssl_config]
+system_default = tls_defaults
+
+[tls_defaults]
+Groups = X25519MLKEM768
+```
+
+Then run RubyGems with that configuration and this plugin's trace enabled:
+
+```sh
+OPENSSL_CONF=/path/to/openssl.cnf \
+RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE=1 \
+RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
+RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS=X25519MLKEM768 \
+  gem install rake
+```
+
+If the OpenSSL configuration prevents a usable TLS handshake, the connection can fail before this plugin has anything to inspect.
+This plugin checks what was actually negotiated or presented after the handshake; it is not a replacement for client-side TLS configuration.
+
 ## Development
 
 Install dependencies:
