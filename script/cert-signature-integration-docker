@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+IMAGE="${RUBY_DOCKER_IMAGE:-ruby:4.0.5-trixie}"
+MATRIX="${MATRIX:-single}"
+
+docker_run_case() {
+  local cert_case="$1"
+  local policy="$2"
+  local scope="$3"
+  local expect="$4"
+
+  echo "== docker certificate signature case: case=${cert_case} policy=${policy} scope=${scope} expect=${expect}"
+  docker run --rm \
+    -v "${ROOT}:/work" \
+    -w /work \
+    -e CERT_SIG_CASE="$cert_case" \
+    -e CERT_SIG_POLICY="$policy" \
+    -e CERT_SIG_SCOPE="$scope" \
+    -e CERT_SIG_EXPECT="$expect" \
+    "${IMAGE}" \
+    bash -lc "bundle install && script/cert-signature-integration"
+}
+
+case "$MATRIX" in
+  single)
+    docker_run_case \
+      "${CERT_SIG_CASE:-classic-leaf-classic-chain}" \
+      "${CERT_SIG_POLICY:-pq_required}" \
+      "${CERT_SIG_SCOPE:-leaf}" \
+      "${CERT_SIG_EXPECT:-fail}"
+    ;;
+  gha)
+    docker_run_case "classic-leaf-classic-chain" "pq_observe" "leaf" "pass"
+    docker_run_case "classic-leaf-classic-chain" "pq_required" "leaf" "fail"
+    docker_run_case "pq-leaf-classic-chain" "pq_required" "leaf" "pass"
+    docker_run_case "pq-leaf-classic-chain" "pq_required" "chain_all" "fail"
+    docker_run_case "classic-leaf-pq-chain" "pq_required" "chain_any" "pass"
+    docker_run_case "pq-leaf-pq-chain" "pq_required" "chain_all" "pass"
+    ;;
+  *)
+    echo "MATRIX must be single or gha" >&2
+    exit 1
+    ;;
+esac

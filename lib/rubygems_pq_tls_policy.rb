@@ -3,6 +3,7 @@
 require_relative "rubygems_pq_tls_policy/version"
 require_relative "rubygems_pq_tls_policy/error"
 require_relative "rubygems_pq_tls_policy/config"
+require_relative "rubygems_pq_tls_policy/certificate_signature"
 require_relative "rubygems_pq_tls_policy/patch"
 require_relative "rubygems_pq_tls_policy/diagnostic"
 
@@ -14,7 +15,7 @@ module Gem
         return false unless config.enabled?
 
         config.validate!
-        install!
+        install!(config)
       end
 
       def install_if_enabled_for_plugin!
@@ -23,10 +24,10 @@ module Gem
         abort "RubyGems PQ TLS policy failed to load: #{e.message} (#{e.class})"
       end
 
-      def install!
+      def install!(config = self.config)
         return true if installed?
 
-        validate_runtime!
+        validate_runtime!(config)
         Gem::Request::HTTPSPool.prepend(RequestHTTPSPoolPatch)
         @installed = true
         true
@@ -66,10 +67,12 @@ module Gem
             "allowed=#{config.allowed_groups.join(',')}"
         end
 
+        check_certificate_signature_policy!(socket, hostname, config)
+
         true
       end
 
-      def validate_runtime!
+      def validate_runtime!(config = self.config)
         begin
           require "openssl"
         rescue LoadError => e
@@ -83,8 +86,13 @@ module Gem
         http_pool = defined?(Gem::Request::HTTPPool) ? Gem::Request::HTTPPool : nil
 
         requirements << "OpenSSL::SSL::SSLSocket is unavailable" unless socket
-        unless socket&.method_defined?(:group)
+        if config.key_exchange_enabled? && !socket&.method_defined?(:group)
           requirements << "OpenSSL::SSL::SSLSocket#group is unavailable"
+        end
+        if config.cert_signature_enabled? &&
+            !socket&.method_defined?(:peer_cert) &&
+            !socket&.method_defined?(:peer_cert_chain)
+          requirements << "OpenSSL::SSL::SSLSocket certificate inspection is unavailable"
         end
         requirements << "Gem::Request::HTTPSPool is unavailable" unless https_pool
         requirements << "Gem::Request::HTTPPool is unavailable" unless http_pool
@@ -95,16 +103,19 @@ module Gem
           requirements << "Gem::Request::HTTPPool#setup_connection is unavailable"
         end
 
-        unless openssl_runtime_version_at_least?(3, 5, 0)
+        if config.key_exchange_enabled? && !openssl_runtime_version_at_least?(3, 5, 0)
           requirements << "OpenSSL runtime must be 3.5.0 or newer for the default PQ TLS group"
         end
 
         return true if requirements.empty?
 
-        raise UnsupportedRuntime,
-          "RubyGems PQ TLS policy cannot be enabled on this Ruby/OpenSSL runtime. " \
-          "#{requirements.join('; ')}. " \
-          "Use Ruby linked against OpenSSL 3.5 or newer, such as ruby:4.0.5-trixie."
+        message = "RubyGems PQ TLS policy cannot be enabled on this Ruby/OpenSSL runtime. " \
+          "#{requirements.join('; ')}."
+        if config.key_exchange_enabled?
+          message += " Use Ruby linked against OpenSSL 3.5 or newer, such as ruby:4.0.5-trixie."
+        end
+
+        raise UnsupportedRuntime, message
       end
 
       def openssl_runtime_version_at_least?(major, minor, patch)
@@ -122,11 +133,43 @@ module Gem
 
       private
 
+      def check_certificate_signature_policy!(socket, hostname, config)
+        return true unless config.cert_signature_enabled?
+
+        chain = peer_cert_chain(socket)
+        verdict = Gem::PqTlsPolicy::CertificateSignature.evaluate(chain, config)
+
+        if config.cert_signature_trace?
+          warn "[rubygems:tls] host=#{hostname} cert_signature_scope=#{verdict.scope} " \
+            "cert_signature_algorithms=#{verdict.algorithms.inspect} cert_pq=#{verdict.compliant?}"
+        end
+
+        if config.cert_signature_pq_required? && !verdict.compliant?
+          raise Gem::PqTlsPolicy::Violation,
+            "RubyGems gem-server TLS certificate signature policy violation: " \
+            "host=#{hostname.inspect} scope=#{config.cert_signature_scope} " \
+            "observed=#{verdict.algorithms.join(',')}; " \
+            "allowed=#{config.allowed_cert_signature_algorithms.join(',')}"
+        end
+
+        true
+      end
+
       def net_http_ssl_socket(http)
         buffered = http.instance_variable_get(:@socket)
         return buffered.io if buffered.respond_to?(:io)
 
         buffered
+      end
+
+      def peer_cert_chain(socket)
+        chain = socket&.respond_to?(:peer_cert_chain) ? socket.peer_cert_chain : nil
+        return chain unless Array(chain).empty?
+
+        cert = socket&.respond_to?(:peer_cert) ? socket.peer_cert : nil
+        cert ? [cert] : []
+      rescue StandardError
+        []
       end
 
       def safe_ssl_version(socket)

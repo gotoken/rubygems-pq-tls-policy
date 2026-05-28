@@ -23,12 +23,14 @@ start_server() {
   local groups="$1"
   local pushed_path="$2"
   local log_path="$3"
+  local cert_path="${4:-$TMP/certs/localhost.crt}"
+  local key_path="${5:-$TMP/certs/localhost.key}"
 
   rm -f "$log_path"
   ruby test/integration/pq_tls/https_gem_server.rb \
     --dir "$TMP/repo" \
-    --cert "$TMP/certs/localhost.crt" \
-    --key "$TMP/certs/localhost.key" \
+    --cert "$cert_path" \
+    --key "$key_path" \
     --port "$PORT" \
     --bind "$HOST" \
     --groups "$groups" \
@@ -64,6 +66,17 @@ expect_failure() {
   fi
 }
 
+expect_output_contains() {
+  local output="$1"
+  local expected="$2"
+
+  if ! grep -q "$expected" <<<"$output"; then
+    echo "expected output to contain: $expected" >&2
+    printf "%s\n" "$output" >&2
+    exit 1
+  fi
+}
+
 require_integration_tls_support() {
   if ruby -ropenssl -e 'socket = OpenSSL::SSL::SSLSocket; context = OpenSSL::SSL::SSLContext.new; exit(socket.method_defined?(:group) && context.respond_to?(:groups=) ? 0 : 1)'; then
     return
@@ -73,6 +86,24 @@ require_integration_tls_support() {
   echo "This Ruby/OpenSSL cannot run the local PQ TLS server." >&2
   echo "Try: script/integration-docker" >&2
   exit 1
+}
+
+generate_mldsa_certificate() {
+  local key_path="$TMP/certs/localhost-mldsa.key"
+  local cert_path="$TMP/certs/localhost-mldsa.crt"
+
+  openssl genpkey -algorithm ML-DSA-44 -out "$key_path" >/dev/null
+  openssl req -new -x509 \
+    -key "$key_path" \
+    -out "$cert_path" \
+    -subj "/CN=localhost" \
+    -days 1 \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature" \
+    -addext "extendedKeyUsage=serverAuth" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null
+
+  ruby -ropenssl -e 'cert = OpenSSL::X509::Certificate.new(File.read(ARGV.fetch(0))); abort "expected ML-DSA certificate signature" unless cert.signature_algorithm == "ML-DSA-44"' "$cert_path"
 }
 
 echo "== diagnose TLS support"
@@ -85,6 +116,7 @@ mkdir -p "$TMP"
 ruby test/integration/pq_tls/build_fixture_gem.rb
 ruby test/integration/pq_tls/make_repo.rb
 ruby test/integration/pq_tls/make_cert.rb
+generate_mldsa_certificate
 mkdir -p "$TMP/plugin"
 gem build rubygems-pq-tls-policy.gemspec --output "$PLUGIN_GEM"
 
@@ -131,6 +163,66 @@ test -s "$TMP/pushed.gem"
 
 stop_server
 
+echo "== certificate signature observe allows classic signature"
+start_server "X25519MLKEM768" "$TMP/pushed_cert_observe.gem" "$TMP/server-cert-observe.log"
+(
+  cd "$TMP/work"
+  rm -f pq_tls_fixture-0.1.0.gem
+  set +e
+  output="$(
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY="pq_observe" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE="leaf" \
+    gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL" 2>&1
+  )"
+  status=$?
+  set -e
+  printf "%s\n" "$output"
+  if [[ "$status" -ne 0 ]]; then
+    echo "certificate signature observe should not fail classic certificate signatures" >&2
+    exit 1
+  fi
+  expect_output_contains "$output" "cert_signature_scope=leaf"
+  expect_output_contains "$output" "cert_pq=false"
+)
+stop_server
+
+echo "== certificate signature required rejects classic signature"
+start_server "X25519MLKEM768" "$TMP/pushed_cert_required_classic.gem" "$TMP/server-cert-required-classic.log"
+(
+  cd "$TMP/work"
+  rm -f pq_tls_fixture-0.1.0.gem
+  set +e
+  output="$(
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY="pq_required" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE="leaf" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE="1" \
+    gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL" 2>&1
+  )"
+  status=$?
+  set -e
+  printf "%s\n" "$output"
+  if [[ "$status" -eq 0 ]]; then
+    echo "certificate signature required should fail classic certificate signatures" >&2
+    exit 1
+  fi
+  expect_output_contains "$output" "cert_pq=false"
+  expect_output_contains "$output" "certificate signature policy violation"
+)
+stop_server
+
+echo "== certificate signature required allows ML-DSA signature"
+start_server "X25519MLKEM768" "$TMP/pushed_cert_required_mldsa.gem" "$TMP/server-cert-required-mldsa.log" "$TMP/certs/localhost-mldsa.crt" "$TMP/certs/localhost-mldsa.key"
+(
+  cd "$TMP/work"
+  rm -f pq_tls_fixture-0.1.0.gem
+  SSL_CERT_FILE="$TMP/certs/localhost-mldsa.crt" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY="pq_required" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE="leaf" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE="1" \
+    gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
+)
+stop_server
+
 echo "== installed RubyGems plugin auto-load"
 AUTOLOAD_GEM_HOME="$TMP/autoload_gems"
 AUTOLOAD_WORK="$TMP/autoload_work"
@@ -138,6 +230,10 @@ mkdir -p "$AUTOLOAD_GEM_HOME" "$AUTOLOAD_WORK"
 env -u RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY \
   -u RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS \
   -u RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE \
+  -u RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY \
+  -u RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE \
+  -u RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE \
+  -u RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS \
   -u RUBYOPT \
   GEM_HOME="$AUTOLOAD_GEM_HOME" \
   GEM_PATH="$AUTOLOAD_GEM_HOME" \
@@ -153,6 +249,10 @@ start_server "X25519MLKEM768" "$TMP/pushed_autoload.gem" "$TMP/server-autoload-p
     RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY" \
     RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS="$RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS" \
     RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY="${RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY:-}" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE="${RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE:-}" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE="${RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE:-}" \
+    RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS="${RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS:-}" \
     SSL_CERT_FILE="$SSL_CERT_FILE" \
     gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
 )
@@ -186,6 +286,10 @@ fi
     RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY" \
     RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS="$RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS" \
     RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY="${RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY:-}" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE="${RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE:-}" \
+    RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE="${RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE:-}" \
+    RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS="${RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS:-}" \
     SSL_CERT_FILE="$SSL_CERT_FILE" \
     gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL"
 )

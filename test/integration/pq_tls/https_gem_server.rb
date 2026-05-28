@@ -16,6 +16,7 @@ OptionParser.new do |parser|
   parser.on("--dir DIR") { |value| options[:dir] = value }
   parser.on("--cert FILE") { |value| options[:cert] = value }
   parser.on("--key FILE") { |value| options[:key] = value }
+  parser.on("--chain FILE") { |value| options[:chain] = value }
   parser.on("--port PORT", Integer) { |value| options[:port] = value }
   parser.on("--bind HOST") { |value| options[:bind] = value }
   parser.on("--groups GROUPS") { |value| options[:groups] = value }
@@ -44,6 +45,7 @@ server = WEBrick::HTTPServer.new(
 context = server.ssl_context
 context.min_version = OpenSSL::SSL::TLS1_3_VERSION if defined?(OpenSSL::SSL::TLS1_3_VERSION)
 context.max_version = OpenSSL::SSL::TLS1_3_VERSION if defined?(OpenSSL::SSL::TLS1_3_VERSION)
+context.extra_chain_cert = [OpenSSL::X509::Certificate.new(File.read(options[:chain]))] if options[:chain]
 
 if context.respond_to?(:groups=)
   context.groups = options[:groups]

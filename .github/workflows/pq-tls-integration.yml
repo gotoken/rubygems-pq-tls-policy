@@ -111,3 +111,80 @@ jobs:
             echo "expected plugin entrypoint abort message" >&2
             exit 1
           fi
+
+  certificate-signature-policy:
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.ruby_image }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: observe-classic-leaf
+            ruby_image: ruby:4.0.5-trixie
+            cert_case: classic-leaf-classic-chain
+            policy: pq_observe
+            scope: leaf
+            expect: pass
+          - name: require-classic-leaf-fails
+            ruby_image: ruby:4.0.5-trixie
+            cert_case: classic-leaf-classic-chain
+            policy: pq_required
+            scope: leaf
+            expect: fail
+          - name: require-pq-leaf-passes
+            ruby_image: ruby:4.0.5-trixie
+            cert_case: pq-leaf-classic-chain
+            policy: pq_required
+            scope: leaf
+            expect: pass
+          - name: require-pq-leaf-classic-chain-all-fails
+            ruby_image: ruby:4.0.5-trixie
+            cert_case: pq-leaf-classic-chain
+            policy: pq_required
+            scope: chain_all
+            expect: fail
+          - name: require-classic-leaf-pq-chain-any-passes
+            ruby_image: ruby:4.0.5-trixie
+            cert_case: classic-leaf-pq-chain
+            policy: pq_required
+            scope: chain_any
+            expect: pass
+          - name: require-pq-leaf-pq-chain-all-passes
+            ruby_image: ruby:4.0.5-trixie
+            cert_case: pq-leaf-pq-chain
+            policy: pq_required
+            scope: chain_all
+            expect: pass
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show versions
+        run: |
+          ruby -v
+          ruby -ropenssl -e 'puts OpenSSL::OPENSSL_VERSION; puts OpenSSL::OPENSSL_LIBRARY_VERSION if defined?(OpenSSL::OPENSSL_LIBRARY_VERSION); p OpenSSL::SSL::SSLSocket.method_defined?(:group); p OpenSSL::SSL::SSLContext.new.respond_to?(:groups=)'
+          openssl version -a
+          openssl list -signature-algorithms | grep -E "ML-DSA|sha256WithRSAEncryption"
+
+      - name: Install development dependencies
+        run: bundle install
+
+      - name: Run certificate signature policy case
+        env:
+          CERT_SIG_CASE: ${{ matrix.cert_case }}
+          CERT_SIG_POLICY: ${{ matrix.policy }}
+          CERT_SIG_SCOPE: ${{ matrix.scope }}
+          CERT_SIG_EXPECT: ${{ matrix.expect }}
+        run: script/cert-signature-integration
+
+      - name: Upload certificate signature logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cert-signature-${{ matrix.name }}-logs
+          path: |
+            tmp/integration/*.log
+            tmp/integration/**/*.log

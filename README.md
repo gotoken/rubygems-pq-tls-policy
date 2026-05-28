@@ -1,8 +1,41 @@
 # rubygems-pq-tls-policy
 
-RubyGems plugin that checks the negotiated TLS key exchange group for RubyGems gem-server HTTPS connections when explicitly enabled.
+RubyGems plugin that checks negotiated TLS properties for RubyGems gem-server HTTPS connections when explicitly enabled.
 
-This repository is an experimental starting point for testing post-quantum TLS key exchange policy enforcement around RubyGems operations.
+This repository is an experimental starting point for testing post-quantum TLS policy enforcement around RubyGems operations.
+
+## Typical uses
+
+Observe negotiated TLS groups:
+
+```sh
+RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE=1 \
+  gem install rake
+```
+
+Require PQ TLS key exchange:
+
+```sh
+RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
+RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS=X25519MLKEM768 \
+  gem install rake
+```
+
+Observe certificate signatures:
+
+```sh
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY=pq_observe \
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE=leaf \
+  gem install rake
+```
+
+Require ML-DSA certificate signatures:
+
+```sh
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY=pq_required \
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE=chain_all \
+  gem install rake
+```
 
 ## Scope
 
@@ -38,6 +71,9 @@ Supported environment variables:
 |---|---|---|
 | `RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY` | `pq_required` | Enables policy enforcement. `default`, `off`, `disabled`, or unset disables it. |
 | `RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS` | `X25519MLKEM768` | Colon- or comma-separated list of allowed negotiated TLS groups. |
+| `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY` | `pq_observe` | Enables certificate signature observation or enforcement. `default`, `off`, `disabled`, or unset disables it. `pq_observe` only traces; `pq_required` rejects non-compliant chains. |
+| `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE` | `leaf` | Certificate signature check scope: `leaf`, `chain_any`, or `chain_all`. Defaults to `leaf`. |
+| `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE` | `1` | Prints certificate signature policy observations. `pq_observe` also prints these observations. |
 | `RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE` | `1` | Prints observed TLS version, cipher, and negotiated group. |
 
 Default allowed group:
@@ -46,6 +82,28 @@ Default allowed group:
 X25519MLKEM768
 ```
 
+Default allowed certificate signature algorithms:
+
+```text
+ML-DSA-44
+ML-DSA-65
+ML-DSA-87
+```
+
+The ML-DSA X.509/PKIX OIDs are also recognized:
+
+```text
+2.16.840.1.101.3.4.3.17  # ML-DSA-44
+2.16.840.1.101.3.4.3.18  # ML-DSA-65
+2.16.840.1.101.3.4.3.19  # ML-DSA-87
+```
+
+Advanced option:
+
+| Variable | Example | Meaning |
+|---|---|---|
+| `RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS` | `ML-DSA-44:2.16.840.1.101.3.4.3.18` | Colon- or comma-separated list of allowed certificate signature algorithm names or OIDs. This is intended for experiments with future algorithms, hybrid/composite identifiers, or vendor OIDs. |
+
 ## Example
 
 ```sh
@@ -53,6 +111,9 @@ gem install rubygems-pq-tls-policy
 
 RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
 RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS=X25519MLKEM768 \
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY=pq_observe \
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE=leaf \
+RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE=1 \
 RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE=1 \
   gem install rake
 ```
@@ -61,9 +122,12 @@ A compliant connection prints trace output similar to:
 
 ```text
 [rubygems:tls] host=rubygems.org version=TLSv1.3 cipher=TLS_AES_256_GCM_SHA384 group="X25519MLKEM768"
+[rubygems:tls] host=rubygems.org cert_signature_scope=leaf cert_signature_algorithms=["ML-DSA-44"] cert_pq=true
 ```
 
 A non-compliant connection raises `Gem::PqTlsPolicy::Violation` before the RubyGems HTTP request proceeds.
+
+The certificate signature policy is independent from the TLS key exchange policy. TLS key exchange checks inspect the negotiated TLS group, while certificate signature checks inspect the X.509 chain returned by `SSLSocket#peer_cert_chain` after the handshake. `peer_cert_chain` does not include the trust anchor/root certificate.
 
 If the policy is enabled on an unsupported runtime, the RubyGems plugin entrypoint exits the `gem` command before the requested operation runs.
 This is intentional because RubyGems treats ordinary plugin load exceptions as warnings and otherwise continues.
@@ -117,8 +181,9 @@ The integration script:
 3. generates a localhost certificate,
 4. starts a localhost HTTPS gem server with `X25519MLKEM768`,
 5. runs `gem fetch`, `gem install`, `bundle install`, and `gem push --host`,
-6. restarts the server with `X25519`, and
-7. verifies that non-PQ TLS group usage is rejected.
+6. verifies certificate signature `pq_observe` and `pq_required` behavior with classic and ML-DSA self-signed certificates,
+7. restarts the server with `X25519`, and
+8. verifies that non-PQ TLS group usage is rejected.
 
 It also builds and installs this plugin into a temporary `GEM_HOME`, clears `RUBYOPT`, and verifies RubyGems plugin auto-loading from the installed gem.
 
@@ -139,6 +204,22 @@ To use another image:
 
 ```sh
 RUBY_DOCKER_IMAGE=ruby:4.0.5-trixie script/integration-docker
+```
+
+To run only the certificate signature policy matrix used by GitHub Actions:
+
+```sh
+MATRIX=gha script/cert-signature-integration-docker
+```
+
+To run one certificate signature case:
+
+```sh
+CERT_SIG_CASE=pq-leaf-classic-chain \
+CERT_SIG_POLICY=pq_required \
+CERT_SIG_SCOPE=leaf \
+CERT_SIG_EXPECT=pass \
+  script/cert-signature-integration-docker
 ```
 
 For an interactive shell:
@@ -191,7 +272,7 @@ This repository includes three workflows:
 |---|---|
 | `CI` | Unit tests and gem build on MRI Ruby. |
 | `Compatibility` | Docker probes on JRuby and TruffleRuby. |
-| `PQ TLS Integration` | Runs unit tests and localhost real-TLS command tests in `ruby:4.0.5-trixie`. |
+| `PQ TLS Integration` | Runs unit tests, localhost real-TLS command tests, certificate signature policy matrix cases, and unsupported-runtime fail-closed checks. |
 
 Compatibility results should be treated as observed behavior, not a compatibility guarantee. Docker `latest` tags are mutable, so JRuby and TruffleRuby rows record the runtime versions observed by the compatibility probe.
 
@@ -220,8 +301,10 @@ The `gem push` test uses a local fake RubyGems-compatible HTTPS endpoint. It doe
 ## Security model
 
 This plugin checks the negotiated TLS group after TLS handshake and hostname verification, but before RubyGems continues with the HTTPS request.
+When certificate signature policy is enabled, it also checks the peer certificate chain after TLS handshake and hostname verification.
 
 It does not prevent a non-PQ TLS handshake from happening. It rejects the connection after observing the negotiated group.
+Likewise, certificate signature enforcement rejects the connection only after the server certificate chain has already been received and verified by the TLS stack.
 
 For a stronger design, combine this plugin with client-side TLS group configuration, an internal gem mirror, or container/network-level egress policy.
 

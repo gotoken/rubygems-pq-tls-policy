@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+PORT="${PORT:-8443}"
+HOST="127.0.0.1"
+SOURCE_URL="https://${HOST}:${PORT}"
+TMP="$ROOT/tmp/integration"
+CASE="${CERT_SIG_CASE:-classic-leaf-classic-chain}"
+POLICY="${CERT_SIG_POLICY:-pq_required}"
+SCOPE="${CERT_SIG_SCOPE:-leaf}"
+EXPECT="${CERT_SIG_EXPECT:-fail}"
+LOG="$TMP/server-cert-signature-${CASE}-${POLICY}-${SCOPE}.log"
+
+cleanup() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+expect_output_contains() {
+  local output="$1"
+  local expected="$2"
+
+  if ! grep -q "$expected" <<<"$output"; then
+    echo "expected output to contain: $expected" >&2
+    printf "%s\n" "$output" >&2
+    exit 1
+  fi
+}
+
+require_integration_tls_support() {
+  if ruby -ropenssl -e 'socket = OpenSSL::SSL::SSLSocket; context = OpenSSL::SSL::SSLContext.new; exit(socket.method_defined?(:group) && context.respond_to?(:groups=) ? 0 : 1)'; then
+    return
+  fi
+
+  echo "certificate signature integration requires Ruby/OpenSSL support for TLS group inspection and selection." >&2
+  exit 1
+}
+
+generate_key() {
+  local kind="$1"
+  local path="$2"
+
+  case "$kind" in
+    classic)
+      openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$path" >/dev/null 2>&1
+      ;;
+    pq)
+      openssl genpkey -algorithm ML-DSA-44 -out "$path" >/dev/null
+      ;;
+    *)
+      echo "unknown key kind: $kind" >&2
+      exit 1
+      ;;
+  esac
+}
+
+generate_chain() {
+  local leaf_signature="$1"
+  local intermediate_signature="$2"
+  local dir="$TMP/cert-signature/$CASE"
+
+  rm -rf "$dir"
+  mkdir -p "$dir"
+
+  generate_key "$intermediate_signature" "$dir/root.key"
+  openssl req -new -x509 \
+    -key "$dir/root.key" \
+    -out "$dir/root.crt" \
+    -subj "/CN=${CASE} root" \
+    -days 1 \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:1" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" >/dev/null
+
+  generate_key "$leaf_signature" "$dir/intermediate.key"
+  openssl req -new \
+    -key "$dir/intermediate.key" \
+    -out "$dir/intermediate.csr" \
+    -subj "/CN=${CASE} intermediate" >/dev/null
+  cat > "$dir/intermediate.ext" <<EOF
+basicConstraints=critical,CA:TRUE,pathlen:0
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid,issuer
+EOF
+  openssl x509 -req \
+    -in "$dir/intermediate.csr" \
+    -CA "$dir/root.crt" \
+    -CAkey "$dir/root.key" \
+    -CAcreateserial \
+    -out "$dir/intermediate.crt" \
+    -days 1 \
+    -extfile "$dir/intermediate.ext" >/dev/null
+
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$dir/leaf.key" >/dev/null 2>&1
+  openssl req -new \
+    -key "$dir/leaf.key" \
+    -out "$dir/leaf.csr" \
+    -subj "/CN=localhost" >/dev/null
+  cat > "$dir/leaf.ext" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:localhost,IP:127.0.0.1
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid,issuer
+EOF
+  openssl x509 -req \
+    -in "$dir/leaf.csr" \
+    -CA "$dir/intermediate.crt" \
+    -CAkey "$dir/intermediate.key" \
+    -CAcreateserial \
+    -out "$dir/leaf.crt" \
+    -days 1 \
+    -extfile "$dir/leaf.ext" >/dev/null
+
+  ruby -ropenssl -e '
+    leaf = OpenSSL::X509::Certificate.new(File.read(ARGV.fetch(0)))
+    intermediate = OpenSSL::X509::Certificate.new(File.read(ARGV.fetch(1)))
+    puts "leaf_signature=#{leaf.signature_algorithm}"
+    puts "intermediate_signature=#{intermediate.signature_algorithm}"
+  ' "$dir/leaf.crt" "$dir/intermediate.crt"
+}
+
+start_server() {
+  rm -f "$LOG"
+  ruby test/integration/pq_tls/https_gem_server.rb \
+    --dir "$TMP/repo" \
+    --cert "$TMP/cert-signature/$CASE/leaf.crt" \
+    --key "$TMP/cert-signature/$CASE/leaf.key" \
+    --chain "$TMP/cert-signature/$CASE/intermediate.crt" \
+    --port "$PORT" \
+    --bind "$HOST" \
+    --groups "X25519MLKEM768" \
+    --pushed-path "$TMP/pushed-cert-signature.gem" \
+    > "$LOG" 2>&1 &
+
+  SERVER_PID=$!
+
+  if ! ruby test/integration/pq_tls/wait_port.rb "$HOST" "$PORT" 30; then
+    echo "server did not start" >&2
+    cat "$LOG" >&2 || true
+    exit 1
+  fi
+}
+
+case "$CASE" in
+  classic-leaf-classic-chain)
+    generate_leaf_signature="classic"
+    generate_intermediate_signature="classic"
+    expected_trace="cert_pq=false"
+    ;;
+  pq-leaf-classic-chain)
+    generate_leaf_signature="pq"
+    generate_intermediate_signature="classic"
+    expected_trace="cert_signature_algorithms=.*ML-DSA-44"
+    ;;
+  classic-leaf-pq-chain)
+    generate_leaf_signature="classic"
+    generate_intermediate_signature="pq"
+    expected_trace="cert_signature_algorithms=.*ML-DSA-44"
+    ;;
+  pq-leaf-pq-chain)
+    generate_leaf_signature="pq"
+    generate_intermediate_signature="pq"
+    expected_trace="cert_pq=true"
+    ;;
+  *)
+    echo "unknown CERT_SIG_CASE: $CASE" >&2
+    exit 1
+    ;;
+esac
+
+case "$EXPECT" in
+  pass|fail) ;;
+  *)
+    echo "CERT_SIG_EXPECT must be pass or fail" >&2
+    exit 1
+    ;;
+esac
+
+echo "== certificate signature integration: case=$CASE policy=$POLICY scope=$SCOPE expect=$EXPECT"
+ruby script/diagnose-tls
+require_integration_tls_support
+
+echo "== prepare fixture repository"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+ruby test/integration/pq_tls/build_fixture_gem.rb
+ruby test/integration/pq_tls/make_repo.rb
+generate_chain "$generate_leaf_signature" "$generate_intermediate_signature"
+
+export SSL_CERT_FILE="$TMP/cert-signature/$CASE/root.crt"
+export RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="pq_required"
+export RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS="X25519MLKEM768"
+export RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY="$POLICY"
+export RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE="$SCOPE"
+export RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE="1"
+export RUBYOPT="-I$ROOT/lib -rrubygems_plugin ${RUBYOPT:-}"
+
+start_server
+
+mkdir -p "$TMP/cert-signature-work"
+cd "$TMP/cert-signature-work"
+
+set +e
+output="$(gem fetch pq_tls_fixture --clear-sources --source "$SOURCE_URL" 2>&1)"
+status=$?
+set -e
+printf "%s\n" "$output"
+
+expect_output_contains "$output" "cert_signature_scope=$SCOPE"
+expect_output_contains "$output" "$expected_trace"
+
+if [[ "$EXPECT" == "pass" && "$status" -ne 0 ]]; then
+  echo "expected certificate signature integration to pass" >&2
+  exit 1
+fi
+
+if [[ "$EXPECT" == "fail" ]]; then
+  if [[ "$status" -eq 0 ]]; then
+    echo "expected certificate signature integration to fail" >&2
+    exit 1
+  fi
+
+  expect_output_contains "$output" "certificate signature policy violation"
+fi
+
+echo "== certificate signature integration complete"
