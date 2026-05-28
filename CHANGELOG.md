@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-05-29
+
+- Add an independent certificate signature policy for RubyGems HTTPS connections.
+- Add `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY` with `pq_observe` and `pq_required` modes.
+- Add `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE` for `leaf`, `chain_any`, and `chain_all` checks.
+- Add `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE` for certificate signature observations.
+- Recognize ML-DSA-44, ML-DSA-65, and ML-DSA-87 certificate signatures by name and X.509 OID.
+- Add an advanced `RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS` allowlist.
+- Add Docker and GitHub Actions coverage for classic and ML-DSA certificate signature policy cases.
+- Document typical use cases for observing and enforcing PQ TLS key exchange and certificate signatures.
+
 ## 1.1.0 - 2026-05-28
 
 - Limit policy installation to RubyGems HTTPS connection pools and per-connection `Gem::Net::HTTP#connect` checks instead of globally prepending `OpenSSL::SSL::SSLSocket`.
