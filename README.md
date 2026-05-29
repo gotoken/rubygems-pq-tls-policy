@@ -76,6 +76,22 @@ Supported environment variables:
 | `RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE` | `1` | Prints certificate signature policy observations. `pq_observe` also prints these observations. |
 | `RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_TRACE` | `1` | Prints observed TLS version, cipher, and negotiated group. |
 
+### Certificate signature scope
+
+`RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE` controls which certificates are used for certificate-signature policy decisions. In this plugin's RubyGems integration, the check is performed on RubyGems' outgoing HTTPS connections to configured gem servers and gem push hosts, so the relevant socket is a TLS client socket. In that client-side context, the peer is the gem server.
+
+The certificate chain is read from `OpenSSL::SSL::SSLSocket#peer_cert_chain` after the TLS handshake. Ruby/OpenSSL returns the peer certificate chain with the peer's certificate first, followed by intermediate CA certificates. The locally trusted trust anchor/root certificate used for verification is not added to this returned chain.
+
+| Scope | Certificates checked | `pq_required` passes when |
+|---|---|---|
+| `leaf` | Only the first certificate returned by `peer_cert_chain`, i.e. the gem server's leaf certificate. | The leaf certificate uses an allowed certificate signature algorithm. |
+| `chain_any` | All certificates returned by `peer_cert_chain`. | At least one returned certificate uses an allowed certificate signature algorithm. |
+| `chain_all` | All certificates returned by `peer_cert_chain`. | Every returned certificate uses an allowed certificate signature algorithm. |
+
+This check inspects the X.509 certificate `signatureAlgorithm` for the returned certificate chain. It is independent from the TLS key exchange policy, which inspects the negotiated TLS group.
+
+If `peer_cert_chain` is unavailable or empty, the implementation falls back to `peer_cert` and treats it as a single-certificate chain.
+
 Default allowed group:
 
 ```text
@@ -125,9 +141,7 @@ A compliant connection prints trace output similar to:
 [rubygems:tls] host=rubygems.org cert_signature_scope=leaf cert_signature_algorithms=["ML-DSA-44"] cert_pq=true
 ```
 
-A non-compliant connection raises `Gem::PqTlsPolicy::Violation` before the RubyGems HTTP request proceeds.
-
-The certificate signature policy is independent from the TLS key exchange policy. TLS key exchange checks inspect the negotiated TLS group, while certificate signature checks inspect the X.509 chain returned by `SSLSocket#peer_cert_chain` after the handshake. `peer_cert_chain` does not include the trust anchor/root certificate.
+A non-compliant connection raises `Gem::PqTlsPolicy::Violation` before the RubyGems HTTP request proceeds. See "Certificate signature scope" for how certificate chains are interpreted.
 
 If the policy is enabled on an unsupported runtime, the RubyGems plugin entrypoint exits the `gem` command before the requested operation runs.
 This is intentional because RubyGems treats ordinary plugin load exceptions as warnings and otherwise continues.
