@@ -65,6 +65,19 @@ RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
   gem install rake
 ```
 
+Once this gem is installed, RubyGems auto-loads its plugin entrypoint for RubyGems commands.
+If one of the policy environment variables below enables the plugin, the same RubyGems HTTPS hook is also active for `bundle install` when Bundler resolves or installs gems from RubyGems gem servers.
+
+For example:
+
+```sh
+gem install rubygems-pq-tls-policy
+
+RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY=pq_required \
+RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS=X25519MLKEM768 \
+  bundle install
+```
+
 Supported environment variables:
 
 | Variable | Example | Meaning |
