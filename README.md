@@ -251,6 +251,16 @@ It also builds and installs this plugin into a temporary `GEM_HOME`, clears `RUB
 
 The script loads the plugin from the checkout using `RUBYOPT=-Ilib -rrubygems_plugin`, so you can test changes before packaging or installing the gem.
 
+To run only one certificate signature policy case locally:
+
+```sh
+CERT_SIG_CASE=pq-leaf-classic-chain \
+CERT_SIG_POLICY=pq_required \
+CERT_SIG_SCOPE=leaf \
+CERT_SIG_EXPECT=pass \
+  script/cert-signature-integration
+```
+
 ## Docker real-TLS integration test
 
 If your local Ruby/OpenSSL is not suitable, use Docker:
