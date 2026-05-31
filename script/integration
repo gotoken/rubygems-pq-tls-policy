@@ -118,7 +118,12 @@ ruby test/integration/pq_tls/make_repo.rb
 ruby test/integration/pq_tls/make_cert.rb
 generate_mldsa_certificate
 mkdir -p "$TMP/plugin"
-gem build rubygems-pq-tls-policy.gemspec --output "$PLUGIN_GEM"
+if gem build --help | grep -q -- "--output"; then
+  gem build rubygems-pq-tls-policy.gemspec --output "$PLUGIN_GEM"
+else
+  built_gem="$(gem build rubygems-pq-tls-policy.gemspec | sed -n 's/^  File: //p')"
+  mv "$built_gem" "$PLUGIN_GEM"
+fi
 
 export SSL_CERT_FILE="$TMP/certs/localhost.crt"
 export GEM_HOST_API_KEY="dummy-token"
@@ -153,7 +158,7 @@ gem "pq_tls_fixture"
 RUBY
 (
   cd "$TMP/bundle_app"
-  ruby -S bundle config set path vendor/bundle
+  ruby -S bundle config path vendor/bundle
   ruby -S bundle install
 )
 
@@ -234,16 +239,17 @@ env -u RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY \
   -u RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE \
   -u RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_TRACE \
   -u RUBYGEMS_GEM_SERVER_TLS_ALLOWED_CERT_SIGNATURE_ALGORITHMS \
-  -u RUBYOPT \
+  RUBYOPT="${RUBYGEMS_PQ_TLS_POLICY_INTEGRATION_COMPAT_RUBYOPT:-}" \
   GEM_HOME="$AUTOLOAD_GEM_HOME" \
   GEM_PATH="$AUTOLOAD_GEM_HOME" \
-  gem install "$PLUGIN_GEM" --no-document
+  gem install "$PLUGIN_GEM" --no-document ${RUBYGEMS_PQ_TLS_POLICY_INTEGRATION_GEM_INSTALL_FLAGS:-}
 
 start_server "X25519MLKEM768" "$TMP/pushed_autoload.gem" "$TMP/server-autoload-pq.log"
 (
   cd "$AUTOLOAD_WORK"
   echo "== installed plugin gem fetch"
-  env -u RUBYOPT \
+  env \
+    RUBYOPT="${RUBYGEMS_PQ_TLS_POLICY_INTEGRATION_COMPAT_RUBYOPT:-}" \
     GEM_HOME="$AUTOLOAD_GEM_HOME" \
     GEM_PATH="$AUTOLOAD_GEM_HOME" \
     RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY" \
@@ -280,7 +286,8 @@ fi
   cd "$AUTOLOAD_WORK"
   rm -f pq_tls_fixture-0.1.0.gem
   echo "== installed plugin gem fetch should fail with non-PQ group"
-  expect_failure env -u RUBYOPT \
+  expect_failure env \
+    RUBYOPT="${RUBYGEMS_PQ_TLS_POLICY_INTEGRATION_COMPAT_RUBYOPT:-}" \
     GEM_HOME="$AUTOLOAD_GEM_HOME" \
     GEM_PATH="$AUTOLOAD_GEM_HOME" \
     RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY="$RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY" \

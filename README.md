@@ -56,6 +56,18 @@ This is **not** a sandbox. It does **not** restrict network connections made by:
 
 For full egress control, use OS/container-level network policy.
 
+## Requirements
+
+The gem install metadata requires:
+
+- Ruby 2.7 or newer
+- RubyGems 2.3.0 or newer
+- `openssl` gem 4.0.x
+
+At runtime, enabling the policy also requires Ruby's OpenSSL extension to be backed by OpenSSL 3.5.0 or newer for the default PQ TLS group.
+The plugin checks runtime capabilities when it is enabled, including RubyGems' HTTPS connection pool hooks, `OpenSSL::SSL::SSLSocket#group`, and OpenSSL library version.
+If these capabilities are missing, the plugin fails closed before the requested RubyGems operation runs.
+
 ## Configuration
 
 The plugin is disabled by default.
@@ -349,6 +361,16 @@ TRUFFLERUBY_DOCKER_IMAGE=ghcr.io/flavorjones/truffleruby:latest \
   script/compatibility-docker
 ```
 
+To test the minimum supported Ruby/RubyGems line with OpenSSL 3.5 from Debian trixie:
+
+```sh
+script/ruby27-openssl4-docker unit
+script/ruby27-openssl4-docker integration
+```
+
+This builds Ruby 2.7.8 without its bundled OpenSSL extension, installs RubyGems 2.3.0 and Bundler 1.17.3, installs `openssl` gem 4.0.0 against Debian trixie's OpenSSL 3.5 library, and runs the normal test or integration flow in that image.
+The probe includes a small RubyGems 2.3.0/Ruby 2.7 compatibility shim for RubyGems behavior around gem building, local SRV endpoint lookup, and legacy `gem push` version checks; it is not part of the plugin runtime.
+
 ## GitHub Actions
 
 This repository includes three workflows:
@@ -356,7 +378,7 @@ This repository includes three workflows:
 | Workflow | Purpose |
 |---|---|
 | `CI` | Unit tests and gem build on MRI Ruby. |
-| `Compatibility` | Docker probes on JRuby and TruffleRuby. |
+| `Compatibility` | Docker probes on JRuby, TruffleRuby, and Ruby 2.7/RubyGems 2.3/OpenSSL gem 4.0. |
 | `PQ TLS Integration` | Runs unit tests, localhost real-TLS command tests, certificate signature policy matrix cases, and unsupported-runtime fail-closed checks. |
 
 Compatibility results should be treated as observed behavior, not a compatibility guarantee. Docker `latest` tags are mutable, so JRuby and TruffleRuby rows record the runtime versions observed by the compatibility probe.
@@ -366,9 +388,10 @@ Observed compatibility:
 | Runtime | Policy enablement | `SSLSocket#group` | Real TLS integration | Notes |
 |---|---:|---:|---:|---|
 | `ruby:4.0.5-trixie` (MRI Ruby 4.0.5 + OpenSSL 3.5) | ✅ | ✅ | ✅ | Default Docker integration/runtime-check image and `PQ TLS Integration` container. |
+| Ruby 2.7.8 + RubyGems 2.3.0 + `openssl` gem 4.0.0 on Debian trixie | ✅ | ✅ | ✅ | Minimum supported Ruby/RubyGems probe via `script/ruby27-openssl4-docker`. |
 | `ruby:4.0.5-bookworm` | ❌ | ❌ | N/A | Expected to fail with `Gem::PqTlsPolicy::UnsupportedRuntime`. |
 | JRuby 10.1.0.0 (Ruby 4.0.0), JRuby-OpenSSL 0.15.6 | ❌ | ❌ | N/A | Observed by source-checkout compatibility probe on 2026-05-22. |
-| TruffleRuby 24.2.2 (Ruby 3.3.7), OpenSSL 3.5.1 | ❌ | ❌ | N/A | Observed by source-checkout compatibility probe on 2026-05-22; below the gemspec Ruby requirement. |
+| TruffleRuby 24.2.2 (Ruby 3.3.7), OpenSSL 3.5.1 | ❌ | ❌ | N/A | Observed by source-checkout compatibility probe on 2026-05-22. |
 
 ## Command coverage
 

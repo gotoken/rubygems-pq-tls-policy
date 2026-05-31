@@ -74,6 +74,20 @@ server.mount_proc "/api/v1/gems" do |req, res|
   res.body = "Successfully registered gem"
 end
 
+# RubyGems 2.3.0's `gem push` signs in with this legacy endpoint when no
+# credentials file exists. Newer RubyGems can push with GEM_HOST_API_KEY alone.
+server.mount_proc "/api/v1/api_key" do |req, res|
+  unless req.request_method == "GET"
+    res.status = 405
+    res.body = "method not allowed"
+    next
+  end
+
+  res.status = 200
+  res["Content-Type"] = "text/plain"
+  res.body = "dummy-token"
+end
+
 trap("INT") { server.shutdown }
 trap("TERM") { server.shutdown }
 

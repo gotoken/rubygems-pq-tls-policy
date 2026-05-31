@@ -66,3 +66,47 @@ jobs:
             echo ""
             echo "See the job log for JRuby and TruffleRuby diagnostics."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  ruby27-openssl4:
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Ruby 2.7 + openssl gem 4.0 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/ruby27-openssl4/Dockerfile
+          load: true
+          tags: rubygems-pq-tls-policy:ruby2.7.8-rubygems2.3.0-openssl4.0.0
+          cache-from: type=gha,scope=ruby27-openssl4
+          cache-to: type=gha,mode=max,scope=ruby27-openssl4
+          build-args: |
+            BASE_IMAGE=debian:trixie
+            RUBY_VERSION=2.7.8
+            OPENSSL_GEM_VERSION=4.0.0
+            RUBYGEMS_VERSION=2.3.0
+            BUNDLER_VERSION=1.17.3
+
+      - name: Run Ruby 2.7 + openssl gem 4.0 compatibility probe
+        env:
+          RUBY27_OPENSSL4_SKIP_BUILD: "1"
+          RUBY27_OPENSSL4_IMAGE: rubygems-pq-tls-policy:ruby2.7.8-rubygems2.3.0-openssl4.0.0
+        run: script/ruby27-openssl4-docker unit
+
+      - name: Write Ruby 2.7 + openssl 4 summary
+        if: always()
+        run: |
+          {
+            echo "## Ruby 2.7 + openssl gem 4.0 probe"
+            echo ""
+            echo "- Job status so far: \`${{ job.status }}\`"
+            echo "- Docker build cache: \`type=gha\`"
+            echo ""
+            echo "See the job log for runtime diagnostics."
+          } >> "$GITHUB_STEP_SUMMARY"

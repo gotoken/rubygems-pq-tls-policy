@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BASE_IMAGE="${RUBY27_OPENSSL4_BASE_IMAGE:-debian:trixie}"
+RUBY_VERSION="${RUBY27_OPENSSL4_RUBY_VERSION:-2.7.8}"
+OPENSSL_GEM_VERSION="${RUBY27_OPENSSL4_OPENSSL_GEM_VERSION:-4.0.0}"
+RUBYGEMS_VERSION="${RUBY27_OPENSSL4_RUBYGEMS_VERSION:-2.3.0}"
+BUNDLER_VERSION="${RUBY27_OPENSSL4_BUNDLER_VERSION:-1.17.3}"
+IMAGE="${RUBY27_OPENSSL4_IMAGE:-rubygems-pq-tls-policy:ruby${RUBY_VERSION}-rubygems${RUBYGEMS_VERSION}-openssl${OPENSSL_GEM_VERSION}}"
+DOCKERFILE="${ROOT}/docker/ruby27-openssl4/Dockerfile"
+
+build_args=(
+  --file "${DOCKERFILE}"
+  --tag "${IMAGE}"
+  --build-arg "BASE_IMAGE=${BASE_IMAGE}"
+  --build-arg "RUBY_VERSION=${RUBY_VERSION}"
+  --build-arg "OPENSSL_GEM_VERSION=${OPENSSL_GEM_VERSION}"
+  --build-arg "RUBYGEMS_VERSION=${RUBYGEMS_VERSION}"
+  --build-arg "BUNDLER_VERSION=${BUNDLER_VERSION}"
+)
+
+case "${RUBY27_OPENSSL4_BUILD_CACHE:-local}" in
+  gha)
+    build_args+=(--cache-from type=gha,scope=ruby27-openssl4)
+    build_args+=(--cache-to type=gha,mode=max,scope=ruby27-openssl4)
+    ;;
+  local)
+    ;;
+  none)
+    build_args+=(--no-cache)
+    ;;
+  *)
+    echo "RUBY27_OPENSSL4_BUILD_CACHE must be local, gha, or none" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "${RUBY27_OPENSSL4_SKIP_BUILD:-0}" == "1" ]]; then
+  echo "== skip build, using image: ${IMAGE}"
+else
+  echo "== build ruby ${RUBY_VERSION} + openssl gem ${OPENSSL_GEM_VERSION} image: ${IMAGE}"
+  if docker buildx version >/dev/null 2>&1; then
+    docker buildx build --load "${build_args[@]}" "${ROOT}"
+  else
+    docker build "${build_args[@]}" "${ROOT}"
+  fi
+fi
+
+run_in_image() {
+  docker run --rm \
+    -v "${ROOT}:/work" \
+    -w /work \
+    -e OPENSSL_GEM_VERSION="${OPENSSL_GEM_VERSION}" \
+    -e RUBYGEMS_VERSION="${RUBYGEMS_VERSION}" \
+    -e BUNDLER_VERSION="${BUNDLER_VERSION}" \
+    -e RUBYOPT="${RUBY27_OPENSSL4_RUBYOPT:--I/work/docker/ruby27-openssl4 -rrubygems23_ruby27_compat}" \
+    -e RUBYGEMS_PQ_TLS_POLICY_INTEGRATION_COMPAT_RUBYOPT="${RUBY27_OPENSSL4_COMPAT_RUBYOPT:--I/work/docker/ruby27-openssl4 -rrubygems23_ruby27_compat}" \
+    -e RUBYGEMS_PQ_TLS_POLICY_INTEGRATION_GEM_INSTALL_FLAGS="${RUBY27_OPENSSL4_INTEGRATION_GEM_INSTALL_FLAGS:-}" \
+    "$@"
+}
+
+case "${1:-unit}" in
+  smoke)
+    shift || true
+    echo "== ruby ${RUBY_VERSION} + openssl gem ${OPENSSL_GEM_VERSION} smoke checks"
+    run_in_image "${IMAGE}" ruby -I/work/lib -ropenssl -rrubygems_pq_tls_policy -e '
+      abort "expected openssl gem #{ENV.fetch("OPENSSL_GEM_VERSION")}, got #{OpenSSL::VERSION}" unless OpenSSL::VERSION == ENV.fetch("OPENSSL_GEM_VERSION")
+      abort "expected RubyGems #{ENV.fetch("RUBYGEMS_VERSION")}, got #{Gem::VERSION}" unless Gem::VERSION == ENV.fetch("RUBYGEMS_VERSION")
+      abort "expected OpenSSL 3.5.x runtime" unless OpenSSL::OPENSSL_LIBRARY_VERSION.start_with?("OpenSSL 3.5.")
+      abort "expected SSLSocket#group" unless OpenSSL::SSL::SSLSocket.method_defined?(:group)
+
+      ENV["RUBYGEMS_GEM_SERVER_TLS_KEY_EXCHANGE_POLICY"] = "pq_required"
+      ENV["RUBYGEMS_GEM_SERVER_TLS_ALLOWED_GROUPS"] = "X25519MLKEM768"
+      Gem::PqTlsPolicy::Diagnostic.report(STDOUT)
+      Gem::PqTlsPolicy.install_if_enabled
+      abort "policy was not installed" unless Gem::PqTlsPolicy.installed?
+      abort "expected HTTPSPool patch" unless Gem::Request::HTTPSPool.ancestors.include?(Gem::PqTlsPolicy::RequestHTTPSPoolPatch)
+
+      cert = Struct.new(:signature_algorithm).new("ML-DSA-44")
+      config = Gem::PqTlsPolicy::Config.new(
+        "RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_POLICY" => "pq_required",
+        "RUBYGEMS_GEM_SERVER_TLS_CERT_SIGNATURE_SCOPE" => "leaf"
+      )
+      verdict = Gem::PqTlsPolicy::CertificateSignature.evaluate([cert], config)
+      abort "expected certificate signature check to pass" unless verdict.compliant?
+
+      puts "policy installed"
+      puts "smoke checks passed"
+    '
+    ;;
+  unit)
+    shift || true
+    echo "== ruby ${RUBY_VERSION} + openssl gem ${OPENSSL_GEM_VERSION} unit tests"
+    run_in_image "${IMAGE}" ruby -I/work/test -I/work/lib -e '
+      Dir["/work/test/*_test.rb"].sort.each { |path| require path }
+    '
+    ;;
+  integration)
+    shift || true
+    echo "== ruby ${RUBY_VERSION} + openssl gem ${OPENSSL_GEM_VERSION} integration"
+    run_in_image "${IMAGE}" bash -c "script/integration"
+    ;;
+  cert-signature-integration)
+    shift || true
+    echo "== ruby ${RUBY_VERSION} + openssl gem ${OPENSSL_GEM_VERSION} certificate signature integration"
+    run_in_image "${IMAGE}" bash -c "script/cert-signature-integration"
+    ;;
+  exec)
+    shift
+    if [[ "$#" -eq 0 ]]; then
+      echo "usage: $0 exec COMMAND [ARG...]" >&2
+      exit 1
+    fi
+    run_in_image "${IMAGE}" "$@"
+    ;;
+  *)
+    echo "usage: $0 [smoke|unit|integration|cert-signature-integration|exec COMMAND...]" >&2
+    exit 1
+    ;;
+esac

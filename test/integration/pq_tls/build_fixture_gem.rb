@@ -26,7 +26,7 @@ File.write(File.join(FIXTURE_ROOT, "pq_tls_fixture.gemspec"), <<~RUBY)
     s.authors = ["CI"]
     s.files = ["lib/pq_tls_fixture.rb"]
     s.require_paths = ["lib"]
-    s.required_ruby_version = ">= 3.1"
+    s.required_ruby_version = ">= 2.7"
   end
 RUBY
 
