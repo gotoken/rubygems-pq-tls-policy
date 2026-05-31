@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.0.0 - 2026-05-31
+
+- Lower gem install requirements to Ruby 2.7 or newer and RubyGems 2.3.0 or newer.
+- Add an `openssl` gem 4.0.x runtime dependency while keeping OpenSSL library capability checks at runtime.
+- Add a Docker compatibility probe for Ruby 2.7.8, RubyGems 2.3.0, `openssl` gem 4.0.0, and Debian trixie's OpenSSL 3.5 runtime.
+- Update the real-TLS integration helpers for RubyGems 2.3.0 behavior, including legacy `gem push` sign-in support.
+- Document the split between gem install metadata requirements and runtime OpenSSL capability checks.
+
 ## 1.2.0 - 2026-05-29
 
 - Add an independent certificate signature policy for RubyGems HTTPS connections.

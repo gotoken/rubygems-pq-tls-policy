@@ -427,7 +427,7 @@ gem build rubygems-pq-tls-policy.gemspec
 Install locally:
 
 ```sh
-gem install ./rubygems-pq-tls-policy-1.2.0.gem
+gem install ./rubygems-pq-tls-policy-2.0.0.gem
 ```
 
 ## License
